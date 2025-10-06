@@ -3,7 +3,7 @@ exp_name: pdbbind_edm_v1
 dataset: 'pdbbind'
 filter_n_atoms: null      # When set, only use complexes with this many atoms
 n_report_steps: 1
-wandb_usr: your_username
+wandb_usr: 'kgrlucifer2025'
 no_cuda: False
 wandb: True
 online: True
@@ -28,6 +28,7 @@ resume: null
 start_epoch: 0
 ema_decay: 0.999
 augment_noise: 0
+normalize_factors: [1, 4, 1]  # Factors for [x, categorical, integer]
 
 # Model settings
 model: 'egnn_dynamics'

@@ -741,7 +741,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         
         # Forward diffusion process
         # x_t = sqrt(alpha_t) * x_0 + sqrt(1 - alpha_t) * eps
-        alpha_t = self.get_alpha(t)  # (bs, 1, 1)
+        alpha_t = self.alpha(t,x)  # (bs, 1, 1)
         
         x_t = torch.sqrt(alpha_t) * x + torch.sqrt(1 - alpha_t) * eps_x
         

@@ -8,32 +8,63 @@ from equivariant_diffusion.en_diffusion import EnVariationalDiffusion
 
 
 def get_model(args, device, dataset_info, dataloader_train):
-    histogram = dataset_info['n_nodes']
-    in_node_nf = len(dataset_info['atom_decoder']) + int(args.include_charges)
-    nodes_dist = DistributionNodes(histogram)
+    # Define how to sample the number of nodes for generation
+    if args.dataset == 'pdbbind':
+        # For PDBbind, create a distribution from the actual sizes in the training set.
+        try:
+            # CORRECTLY access the list of data dictionaries and extract 'num_atoms' for each
+            num_atoms_list = [d['num_atoms'] for d in dataloader_train.dataset.data_list]
+            histogram = {}
+            for size in num_atoms_list:
+                s = int(size)
+                histogram[s] = histogram.get(s, 0) + 1
+            nodes_dist = DistributionNodes(histogram)
+            prop_dist = None  # No property distribution for PDBbind in this setup
+        except (AttributeError, TypeError, KeyError):
+            print("Warning: Could not create node distribution from dataset. Using a placeholder.")
+            # Fallback to a placeholder if data structure is different
+            nodes_dist = DistributionNodes({500: 1}) # Placeholder
+            prop_dist = None
+    else:
+        # Original logic for QM9
+        histogram = dataset_info['n_nodes']
+        nodes_dist = DistributionNodes(histogram)
+        prop_dist = None
+        if len(args.conditioning) > 0:
+            prop_dist = DistributionProperty(dataloader_train, args.conditioning)
 
-    prop_dist = None
-    if len(args.conditioning) > 0:
-        prop_dist = DistributionProperty(dataloader_train, args.conditioning)
+    # --- The rest of the function remains the same ---
 
+    # Define the number of features for the data itself
+    if args.dataset == 'pdbbind':
+        # For PDBbind: atom_one_hot + node_type_one_hot + charges
+        data_in_node_nf = len(dataset_info['atom_decoder']) + 2 + int(args.include_charges)
+    else:
+        # Original logic for QM9
+        data_in_node_nf = len(dataset_info['atom_decoder']) + int(args.include_charges)
+
+    # Define the number of features the dynamics model will see
     if args.condition_time:
-        dynamics_in_node_nf = in_node_nf + 1
+        dynamics_in_node_nf = data_in_node_nf + 1
     else:
         print('Warning: dynamics model is _not_ conditioned on time.')
-        dynamics_in_node_nf = in_node_nf
+        dynamics_in_node_nf = data_in_node_nf
 
+    # Initialize the dynamics network (the EGNN)
     net_dynamics = EGNN_dynamics_QM9(
-        in_node_nf=dynamics_in_node_nf, context_node_nf=args.context_node_nf,
+        in_node_nf=dynamics_in_node_nf,
+        context_node_nf=args.context_node_nf,
         n_dims=3, device=device, hidden_nf=args.nf,
         act_fn=torch.nn.SiLU(), n_layers=args.n_layers,
         attention=args.attention, tanh=args.tanh, mode=args.model, norm_constant=args.norm_constant,
         inv_sublayers=args.inv_sublayers, sin_embedding=args.sin_embedding,
         normalization_factor=args.normalization_factor, aggregation_method=args.aggregation_method)
 
+    # Initialize the diffusion model wrapper
     if args.probabilistic_model == 'diffusion':
         vdm = EnVariationalDiffusion(
             dynamics=net_dynamics,
-            in_node_nf=in_node_nf,
+            in_node_nf=data_in_node_nf,
             n_dims=3,
             timesteps=args.diffusion_steps,
             noise_schedule=args.diffusion_noise_schedule,
@@ -47,7 +78,6 @@ def get_model(args, device, dataset_info, dataloader_train):
 
     else:
         raise ValueError(args.probabilistic_model)
-
 
 def get_optim(args, generative_model):
     optim = torch.optim.AdamW(

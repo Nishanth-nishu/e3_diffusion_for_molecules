@@ -45,6 +45,8 @@ class Config:
 
 cfg = Config(**config)
 
+cfg.diffusion_noise_precision = float(cfg.diffusion_noise_precision)
+
 # Override with command line arguments
 if args.exp_name:
     cfg.exp_name = args.exp_name
@@ -56,7 +58,10 @@ if args.no_wandb:
     cfg.no_wandb = True
 
 # Add dataset info to config
-dataset_info = get_dataset_info('pdbbind', cfg.get('remove_h', False))
+# CORRECTED LINE 59
+# Use getattr to safely access the attribute with a default value
+remove_h_flag = getattr(cfg, 'remove_h', False)
+dataset_info = get_dataset_info('pdbbind', remove_h_flag)
 cfg.dataset_info = dataset_info
 
 atom_encoder = dataset_info['atom_encoder']
@@ -90,13 +95,14 @@ if cfg.resume is not None:
 utils.create_folders(cfg)
 
 # Wandb setup
-if cfg.no_wandb:
+if getattr(cfg, 'no_wandb', False):
     mode = 'disabled'
 else:
     mode = 'online' if cfg.online else 'offline'
 
+# CORRECTED CODE
 kwargs = {
-    'entity': cfg.wandb_usr,
+    'entity': "kgrlucifer2025-kgrcet",  # Explicitly set your team entity here
     'name': cfg.exp_name,
     'project': 'pdbbind_edm',
     'config': vars(cfg),
@@ -104,6 +110,7 @@ kwargs = {
     'reinit': True,
     'mode': mode
 }
+
 wandb.init(**kwargs)
 wandb.save('*.txt')
 

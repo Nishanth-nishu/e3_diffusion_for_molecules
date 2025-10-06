@@ -38,8 +38,18 @@ class EGNN_dynamics_QM9(nn.Module):
     def _forward(self, t, xh, node_mask, edge_mask, context):
         bs, n_nodes, dims = xh.shape
         h_dims = dims - self.n_dims
-        edges = self.get_adj_matrix(n_nodes, bs, self.device)
-        edges = [x.to(self.device) for x in edges]
+        edge_mask_dense = edge_mask.view(bs, n_nodes, n_nodes)
+        rows_list, cols_list = [], []
+        for i in range(bs):
+            # Find the indices of existing edges for each item in the batch
+            rows, cols = torch.where(edge_mask_dense[i])
+            rows_list.append(rows + i * n_nodes)
+            cols_list.append(cols + i * n_nodes)
+
+        rows = torch.cat(rows_list).to(self.device)
+        cols = torch.cat(cols_list).to(self.device)
+        edges = [rows, cols]
+
         node_mask = node_mask.view(bs*n_nodes, 1)
         edge_mask = edge_mask.view(bs*n_nodes*n_nodes, 1)
         xh = xh.view(bs*n_nodes, -1).clone() * node_mask
