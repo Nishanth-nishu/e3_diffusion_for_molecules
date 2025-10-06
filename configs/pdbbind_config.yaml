@@ -1,0 +1,75 @@
+# Experiment settings
+exp_name: pdbbind_edm_v1
+dataset: 'pdbbind'
+filter_n_atoms: null      # When set, only use complexes with this many atoms
+n_report_steps: 1
+wandb_usr: your_username
+no_cuda: False
+wandb: True
+online: True
+data_dir: 'data/pdbbind'
+
+# Training settings
+n_epochs: 200
+batch_size: 8              # Smaller batch size due to larger molecules
+lr: 0.0001
+brute_force: False
+
+break_train_epoch: False
+dp: True
+condition_time: True
+clip_grad: True
+save_model: True
+generate_epochs: 10
+num_workers: 4
+test_epochs: 5
+data_augmentation: False   # Can add rotation augmentation
+resume: null
+start_epoch: 0
+ema_decay: 0.999
+augment_noise: 0
+
+# Model settings
+model: 'egnn_dynamics'
+probabilistic_model: 'diffusion'
+diffusion_steps: 500
+diffusion_noise_schedule: 'polynomial_2'
+diffusion_noise_precision: 1e-5
+diffusion_loss_type: 'l2'
+n_layers: 8               # More layers for complex interactions
+nf: 128                   # Larger hidden dimension
+ode_regularization: 0.001
+trace: 'hutch'
+dequantization: 'argmax_variational'
+tanh: True
+attention: True
+x_aggregation: 'sum'
+conditioning: []          # Can condition on binding affinity, etc.
+actnorm: True
+norm_constant: 1
+inv_sublayers: 2
+sin_embedding: True
+normalization_factor: 100
+aggregation_method: 'sum'
+
+# PDBbind-specific settings
+distance_cutoff: 10.0     # Angstroms for edge creation
+max_protein_atoms: 1000   # Maximum protein atoms to include
+max_ligand_atoms: 100     # Maximum ligand atoms
+pocket_only: True         # Only use binding pocket atoms
+pocket_cutoff: 10.0       # Distance from ligand to define pocket
+include_charges: True
+include_bond_types: False # Whether to use ligand bond information
+
+# Atom types to include
+protein_atoms: ['C', 'N', 'O', 'S']  # Common protein atoms
+ligand_atoms: ['C', 'N', 'O', 'S', 'F', 'Cl', 'Br', 'P']
+
+# Data splits
+train_split: 'refined-set'  # or 'general-set'
+val_proportion: 0.1
+test_proportion: 0.1
+
+# Placeholders
+context_node_nf: 0
+data_root_dir: null
