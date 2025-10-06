@@ -12,14 +12,13 @@ def assert_correctly_masked(variable, node_mask):
 def compute_loss_and_nll(args, generative_model, nodes_dist, x, h, node_mask, edge_mask, context):
     bs, n_nodes, n_dims = x.size()
 
-
     if args.probabilistic_model == 'diffusion':
         edge_mask = edge_mask.view(bs, n_nodes * n_nodes)
 
         assert_correctly_masked(x, node_mask)
 
-        # Here x is a position tensor, and h is a dictionary with keys
-        # 'categorical' and 'integer'.
+        # For PDBbind, h might contain 'is_ligand' in addition to categorical/integer
+        # This is handled transparently by the model
         nll = generative_model(x, h, node_mask, edge_mask, context)
 
         N = node_mask.squeeze(2).sum(1).long()
@@ -29,7 +28,7 @@ def compute_loss_and_nll(args, generative_model, nodes_dist, x, h, node_mask, ed
         assert nll.size() == log_pN.size()
         nll = nll - log_pN
 
-        # Average over batch.
+        # Average over batch
         nll = nll.mean(0)
 
         reg_term = torch.tensor([0.]).to(nll.device)

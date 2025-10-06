@@ -134,6 +134,9 @@ geom_no_h = {
     'with_h': False}
 
 
+# Add PDBbind configuration
+from pdbbind.data.dataset_config import get_pdbbind_config
+
 def get_dataset_info(dataset_name, remove_h):
     if dataset_name == 'qm9':
         if not remove_h:
@@ -150,5 +153,7 @@ def get_dataset_info(dataset_name, remove_h):
             return qm9_second_half
         else:
             raise Exception('Missing config for %s without hydrogens' % dataset_name)
+    elif dataset_name == 'pdbbind':
+        return get_pdbbind_config(remove_h)
     else:
         raise Exception("Wrong dataset %s" % dataset_name)

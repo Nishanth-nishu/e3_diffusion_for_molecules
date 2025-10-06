@@ -685,31 +685,145 @@ class EnVariationalDiffusion(torch.nn.Module):
         return loss, {'t': t_int.squeeze(), 'loss_t': loss.squeeze(),
                       'error': error.squeeze()}
 
-    def forward(self, x, h, node_mask=None, edge_mask=None, context=None):
+    def forward(self, x, h, node_mask, edge_mask, context):
         """
-        Computes the loss (type l2 or NLL) if training. And if eval then always computes NLL.
+        Computes the loss (variational lower bound) for training.
+        
+        Args:
+            x: Positions (bs, n_nodes, 3)
+            h: Dict with keys:
+                - 'categorical': one-hot atom types (bs, n_nodes, n_atom_types)
+                - 'integer': charges (bs, n_nodes, 1) [optional]
+                - 'is_ligand': protein/ligand indicator (bs, n_nodes, 1) [optional for PDBbind]
+            node_mask: (bs, n_nodes, 1)
+            edge_mask: (bs, n_nodes * n_nodes)
+            context: Context features (bs, n_nodes, context_dim) [optional]
         """
-        # Normalize data, take into account volume change in x.
-        x, h, delta_log_px = self.normalize(x, h, node_mask)
-
-        # Reset delta_log_px if not vlb objective.
-        if self.training and self.loss_type == 'l2':
-            delta_log_px = torch.zeros_like(delta_log_px)
-
-        if self.training:
-            # Only 1 forward pass when t0_always is False.
-            loss, loss_dict = self.compute_loss(x, h, node_mask, edge_mask, context, t0_always=False)
+        bs, n_nodes, n_dims = x.size()
+        
+        # Extract features from h dict
+        categorical = h.get('categorical', None)
+        integer_features = h.get('integer', None)
+        is_ligand = h.get('is_ligand', None)
+        
+        # Combine all node features
+        h_list = []
+        if categorical is not None:
+            h_list.append(categorical)
+        if integer_features is not None and integer_features.numel() > 0:
+            h_list.append(integer_features)
+        if is_ligand is not None:
+            # is_ligand is static - doesn't change during diffusion
+            h_list.append(is_ligand)
+        
+        if len(h_list) > 0:
+            h_combined = torch.cat(h_list, dim=-1)
         else:
-            # Less variance in the estimator, costs two forward passes.
-            loss, loss_dict = self.compute_loss(x, h, node_mask, edge_mask, context, t0_always=True)
+            h_combined = None
+        
+        # Sample timestep
+        t_int = torch.randint(0, self.T + 1, size=(bs, 1), device=x.device).float()
+        t = t_int / self.T
+        
+        # Normalize x to have zero mean
+        x = utils.remove_mean_with_mask(x, node_mask)
+        
+        # Sample noise
+        eps_x = utils.sample_center_gravity_zero_gaussian_with_mask(
+            x.size(), x.device, node_mask
+        )
+        
+        # For categorical features, sample from categorical distribution
+        if categorical is not None:
+            eps_categorical = self.sample_categorical_noise(categorical, node_mask)
+        else:
+            eps_categorical = None
+        
+        # Forward diffusion process
+        # x_t = sqrt(alpha_t) * x_0 + sqrt(1 - alpha_t) * eps
+        alpha_t = self.get_alpha(t)  # (bs, 1, 1)
+        
+        x_t = torch.sqrt(alpha_t) * x + torch.sqrt(1 - alpha_t) * eps_x
+        
+        # For categorical, use similar noising
+        if eps_categorical is not None:
+            h_t_categorical = torch.sqrt(alpha_t) * categorical + torch.sqrt(1 - alpha_t) * eps_categorical
+        else:
+            h_t_categorical = categorical
+        
+        # Reconstruct h_t with noised features
+        h_t_list = []
+        if h_t_categorical is not None:
+            h_t_list.append(h_t_categorical)
+        if integer_features is not None and integer_features.numel() > 0:
+            # Integer features can also be noised similarly
+            eps_int = torch.randn_like(integer_features)
+            h_t_int = torch.sqrt(alpha_t) * integer_features + torch.sqrt(1 - alpha_t) * eps_int
+            h_t_list.append(h_t_int)
+        if is_ligand is not None:
+            # IMPORTANT: is_ligand should NOT be noised - it's a fixed indicator
+            h_t_list.append(is_ligand)
+        
+        if len(h_t_list) > 0:
+            h_t_combined = torch.cat(h_t_list, dim=-1)
+        else:
+            h_t_combined = None
+        
+        # Predict noise using dynamics network
+        # The network receives x_t, h_t, and timestep t
+        xh_t = torch.cat([x_t, h_t_combined], dim=-1) if h_t_combined is not None else x_t
+        
+        # Call dynamics network
+        predicted_noise = self.dynamics._forward(
+            t, xh_t, node_mask, edge_mask, context
+        )
+        
+        # Split predicted noise into x and h components
+        predicted_eps_x = predicted_noise[:, :, :3]
+        if h_t_combined is not None:
+            predicted_eps_h = predicted_noise[:, :, 3:]
+        else:
+            predicted_eps_h = None
+        
+        # Compute loss
+        # Position loss
+        loss_x = F.mse_loss(predicted_eps_x, eps_x, reduction='none')
+        loss_x = (loss_x * node_mask).sum() / node_mask.sum()
+        
+        # Feature loss
+        if predicted_eps_h is not None and eps_categorical is not None:
+            # Only compute loss on noised features (not is_ligand)
+            n_categorical = categorical.size(-1)
+            predicted_eps_categorical = predicted_eps_h[:, :, :n_categorical]
+            loss_h = F.mse_loss(predicted_eps_categorical, eps_categorical, reduction='none')
+            loss_h = (loss_h * node_mask).sum() / node_mask.sum()
+            
+            # If integer features present
+            if integer_features is not None and integer_features.numel() > 0:
+                n_int = integer_features.size(-1)
+                predicted_eps_int = predicted_eps_h[:, :, n_categorical:n_categorical+n_int]
+                loss_int = F.mse_loss(predicted_eps_int, eps_int, reduction='none')
+                loss_int = (loss_int * node_mask).sum() / node_mask.sum()
+                loss_h = loss_h + loss_int
+        else:
+            loss_h = torch.tensor(0.0).to(x.device)
+        
+        # Total loss
+        total_loss = loss_x + loss_h
+        
+        return total_loss
 
-        neg_log_pxh = loss
-
-        # Correct for normalization on x.
-        assert neg_log_pxh.size() == delta_log_px.size()
-        neg_log_pxh = neg_log_pxh - delta_log_px
-
-        return neg_log_pxh
+    def sample_categorical_noise(self, categorical, node_mask):
+        """Sample noise for categorical features."""
+        bs, n_nodes, n_categories = categorical.size()
+        
+        # Sample from standard normal for each category
+        noise = torch.randn(bs, n_nodes, n_categories, device=categorical.device)
+        
+        # Mask invalid nodes
+        noise = noise * node_mask
+        
+        return noise
 
     def sample_p_zs_given_zt(self, s, t, zt, node_mask, edge_mask, context, fix_noise=False):
         """Samples from zs ~ p(zs | zt). Only used during sampling."""
